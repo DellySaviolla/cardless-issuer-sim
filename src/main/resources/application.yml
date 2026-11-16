@@ -1,0 +1,19 @@
+server:
+  port: 8080
+spring:
+  application:
+    name: cardless-issuer-sim
+issuer:
+  id: ISSUER-SIM-001
+  company-code: "0001"
+  acquirer-id: "0001"
+  secret-key: ${JALIN_SECRET_KEY:default_sandbox_key}
+  validate-signature: false
+iso8583:
+  enabled: false
+  port: 8583
+  length-header-bytes: 2
+  packager-path: /iso8583/packager.xml
+logging:
+  level:
+    com.example.issuersim: INFO

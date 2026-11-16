@@ -1,0 +1,6 @@
+services:
+  issuer-sim:
+    build: .
+    ports:
+      - "8080:8080"
+      - "8583:8583"

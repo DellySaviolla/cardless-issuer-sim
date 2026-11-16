@@ -1,0 +1,58 @@
+{
+    "info": {
+        "_postman_id": "c1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6",
+        "name": "Cardless Issuer Sim (Fixed)",
+        "description": "Collection for testing Cardless Withdrawal Off Us REST API",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "item": [
+        {
+            "name": "1. Health Check",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "{{baseUrl}}/health",
+                    "host": ["{{baseUrl}}"],
+                    "path": ["health"]
+                }
+            }
+        },
+        {
+            "name": "2. Debit - Approved (RC 00)",
+            "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"mti\": \"0200\",\n    \"pan\": \"0849000081123456789\",\n    \"procCode\": \"320000\",\n    \"amount\": \"000005000000\",\n    \"tmsDateTime\": \"0723084451\",\n    \"stan\": \"123456\",\n    \"localTime\": \"165959\",\n    \"localDate\": \"0723\",\n    \"captureDate\": \"0723\",\n    \"channelCode\": \"6011\",\n    \"posEntryMode\": \"000\",\n    \"acquirerId\": \"0001\",\n    \"rrn\": \"123456789012\",\n    \"terminalId\": \"0000000000000001\",\n    \"terminalInfo\": \"ATM1 Jakarta JKTID\",\n    \"additionalData48\": \"PI04W001CI2000112345678901234567OT2012345678901234567890\",\n    \"currencyCode\": \"360\",\n    \"terminalData\": \"MDR 1234+120\"\n}"
+                },
+                "url": {
+                    "raw": "{{baseUrl}}/{{network}}/jalin/openapi/cardless/withdrawaloffus/debit",
+                    "host": ["{{baseUrl}}"],
+                    "path": ["{{network}}", "jalin", "openapi", "cardless", "withdrawaloffus", "debit"]
+                }
+            }
+        },
+        {
+            "name": "3. Reversal (RC 00)",
+            "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"mti\": \"0420\",\n    \"pan\": \"0849000081123456789\",\n    \"procCode\": \"320000\",\n    \"amount\": \"000005000000\",\n    \"tmsDateTime\": \"0723084451\",\n    \"stan\": \"777777\",\n    \"localTime\": \"170000\",\n    \"localDate\": \"0723\",\n    \"settlementDate\": \"0723\",\n    \"captureDate\": \"0723\",\n    \"channelCode\": \"6011\",\n    \"posEntryMode\": \"000\",\n    \"acquirerId\": \"0001\",\n    \"rrn\": \"123456789012\",\n    \"authIDResponse\": \"A1B2C3\",\n    \"responseCode\": \"00\",\n    \"terminalId\": \"0000000000000001\",\n    \"terminalInfo\": \"ATM1 Jakarta JKTID\",\n    \"additionalData48\": \"PI00\",\n    \"currencyCode\": \"360\",\n    \"terminalData\": \"MDR 1234+120\",\n    \"originalDataElements\": \"020012345678901207231545000723000000000000\",\n    \"companyCode\": \"0001\",\n    \"accountId\": \"1234567890123456789\"\n}"
+                },
+                "url": {
+                    "raw": "{{baseUrl}}/{{network}}/jalin/openapi/cardless/withdrawaloffus/reversal",
+                    "host": ["{{baseUrl}}"],
+                    "path": ["{{network}}", "jalin", "openapi", "cardless", "withdrawaloffus", "reversal"]
+                }
+            }
+        }
+    ],
+    "variable": [
+        { "key": "baseUrl", "value": "http://localhost:8080" },
+        { "key": "network", "value": "jalin" }
+    ]
+}
