@@ -17,6 +17,8 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class WithdrawalService {
@@ -45,6 +47,11 @@ public class WithdrawalService {
 
     public WithdrawResponse authorize(WithdrawRequest req) {
         long start = System.currentTimeMillis();
+        
+        // 1. Validasi Request berdasarkan Global Request Settings
+        WithdrawResponse validationError = validateIncomingRequest(req, start);
+        if (validationError != null) return validationError;
+
         String idemKey = req.idempotencyKey();
         
         Optional<CardlessToken> tOpt = tokenRepo.find(req.pan);
@@ -55,7 +62,6 @@ public class WithdrawalService {
         if (aOpt.isEmpty()) return decline(req, "14", "Account not found", start);
         Account acc = aOpt.get();
 
-        // Pindahkan lock ke sini agar cek idempotency aman dari race condition
         synchronized (acc) {
             Optional<WithdrawResponse> cached = idemRepo.find(idemKey);
             if (cached.isPresent()) {
@@ -77,12 +83,10 @@ public class WithdrawalService {
             SimulatorSettings settings = settingsService.getSettings();
             String forcedRc = settings.getDefaultResponseCode();
 
-            // Cek forced RC dulu, JANGAN potong saldo kalau bukan "00"
             if (!"00".equals(forcedRc)) {
                 return decline(req, forcedRc, getMessageForCode(forcedRc), start);
             }
 
-            // Jika RC "00", baru potong saldo
             acc.balance -= amt;
             acc.usedToday += amt;
 
@@ -97,6 +101,76 @@ public class WithdrawalService {
         }
     }
 
+    // Logika Validasi Request
+    private WithdrawResponse validateIncomingRequest(WithdrawRequest req, long start) {
+        SimulatorSettings settings = settingsService.getSettings();
+
+        // 1. Validasi ProcCode
+        if (settings.getValProcCode() != null && !settings.getValProcCode().isEmpty()) {
+            if (!settings.getValProcCode().equals(req.procCode)) {
+                return decline(req, "12", "Invalid ProcCode", start);
+            }
+        }
+
+        // 2. Validasi Amount (Setting dalam rupiah, Request dalam cents)
+        if (settings.getValAmount() > 0) {
+            long expectedCents = settings.getValAmount() * 100; 
+            if (req.amountCents() != expectedCents) {
+                return decline(req, "13", "Invalid Amount", start);
+            }
+        }
+
+        // 3. Validasi Acquirer Bank (4 Digit)
+        if (settings.getValAcquirerBank() != null && !settings.getValAcquirerBank().isEmpty()) {
+            if (!settings.getValAcquirerBank().equals(req.acquirerId)) {
+                return decline(req, "92", "Invalid Acquirer Bank", start);
+            }
+        }
+
+        // 4. Validasi Issuer Bank (Ambil 4 digit pertama dari PAN)
+        if (settings.getValIssuerBank() != null && !settings.getValIssuerBank().isEmpty()) {
+            String panIssuer = req.pan != null && req.pan.length() >= 4 ? req.pan.substring(0, 4) : "";
+            if (!settings.getValIssuerBank().equals(panIssuer)) {
+                return decline(req, "91", "Issuer Unavailable", start);
+            }
+        }
+
+        // 5. Validasi additionalData48 (TLV Format: PI04 + CI19 + OT06)
+        String addData = req.additionalData48 != null ? req.additionalData48 : "";
+        
+        // Cek PI04
+        if (!addData.startsWith("PI04W001")) {
+            return decline(req, "12", "Invalid Additional Data (PI)", start);
+        }
+
+        // Cek CI19 (PAN harus sama dengan req.pan)
+        Pattern ciPattern = Pattern.compile("CI19(\\d{19})");
+        Matcher ciMatcher = ciPattern.matcher(addData);
+        if (!ciMatcher.find() || !ciMatcher.group(1).equals(req.pan)) {
+            return decline(req, "12", "Invalid Additional Data (CI/PAN)", start);
+        }
+
+        // Cek OT06 (OTP)
+        if (settings.getValOtp() != null && !settings.getValOtp().isEmpty()) {
+            Pattern otPattern = Pattern.compile("OT06(\\d{6})");
+            Matcher otMatcher = otPattern.matcher(addData);
+            String extractedOtp = otMatcher.find() ? otMatcher.group(1) : "";
+            
+            if (!settings.getValOtp().equals(extractedOtp)) {
+                return decline(req, "12", "Invalid OTP", start);
+            }
+        }
+
+        // Cek Nomor Telp (Jika diselipkan di PI04, atau kita bisa longgarkan)
+        if (settings.getValPhoneNumber() != null && !settings.getValPhoneNumber().isEmpty()) {
+            if (!addData.contains(settings.getValPhoneNumber())) {
+                return decline(req, "12", "Invalid Phone Number", start);
+            }
+        }
+
+        return null; // Lolos validasi
+    }
+
     public ReversalResponse reverse(ReversalRequest req) {
         String originalStan = req.originalStan();
         Optional<WithdrawResponse> orig = originalStan == null ? Optional.empty() : approvalRepo.find(originalStan);
@@ -108,7 +182,7 @@ public class WithdrawalService {
         if (orig.isEmpty()) {
             resp.responseCode = "25";
             resp.responseMessage = "Unable to locate record";
-            logRepo.save(createLogReverse(req, resp));
+            logRepo.save(createLogReverse(req, resp, "REST"));
             return resp;
         }
 
@@ -126,7 +200,7 @@ public class WithdrawalService {
         approvalRepo.remove(originalStan);
         resp.responseCode = "00";
         resp.responseMessage = "Approved";
-        logRepo.save(createLogReverse(req, resp));
+        logRepo.save(createLogReverse(req, resp, "REST"));
         return resp;
     }
 
@@ -166,7 +240,6 @@ public class WithdrawalService {
         SimulatorSettings settings = settingsService.getSettings();
         WithdrawResponse resp = buildBaseResponse(req, settings);
         
-        // Gunakan RC dari parameter, BUKAN dari setting
         resp.responseCode = code;
         resp.responseMessage = msg;
         
@@ -181,17 +254,18 @@ public class WithdrawalService {
             case "00" -> "Approved";
             case "05" -> "Do Not Honor";
             case "12" -> "Invalid Transaction";
+            case "13" -> "Invalid Amount";
             case "14" -> "Invalid PAN";
             case "51" -> "Insufficient Funds";
             case "54" -> "Expired PAN";
             case "61" -> "Exceeds Limit";
             case "91" -> "Issuer Unavailable";
+            case "92" -> "Invalid Acquirer";
             case "96" -> "System Malfunction";
             default -> "Unknown Error";
         };
     }
 
-    // Masking PAN untuk keamanan log (Fix Confidentiality)
     private String maskPan(String pan) {
         if (pan == null || pan.length() < 10) return pan;
         return pan.substring(0, 6) + "******" + pan.substring(pan.length() - 4);
@@ -205,11 +279,11 @@ public class WithdrawalService {
             rawRes = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(resp);
         } catch (Exception e) {}
         
-        return new TransactionLog(req.mti, req.stan, maskPan(req.pan), resp.procCode, resp.amount, 
-                resp.responseCode, resp.responseMessage, resp.companyCode, source, duration, rawReq, rawRes);
+        return new TransactionLog(req.mti, "CCW", source, req.stan, req.rrn, maskPan(req.pan), resp.procCode, resp.amount, 
+                resp.responseCode, resp.responseMessage, resp.companyCode, duration, rawReq, rawRes);
     }
 
-    private TransactionLog createLogReverse(ReversalRequest req, ReversalResponse resp) {
+    private TransactionLog createLogReverse(ReversalRequest req, ReversalResponse resp, String source) {
         String rawReq = "{}";
         String rawRes = "{}";
         try {
@@ -217,7 +291,7 @@ public class WithdrawalService {
             rawRes = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(resp);
         } catch (Exception e) {}
         
-        return new TransactionLog("0420", req.stan, maskPan(req.pan), req.procCode, req.amount, 
-                resp.responseCode, resp.responseMessage, "", "REVERSAL", 0, rawReq, rawRes);
+        return new TransactionLog("0420", "CCW REVERSAL", source, req.stan, req.rrn, maskPan(req.pan), req.procCode, req.amount, 
+                resp.responseCode, resp.responseMessage, "", 0, rawReq, rawRes);
     }
 }
